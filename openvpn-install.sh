@@ -7,6 +7,11 @@
 # your Debian/Ubuntu/CentOS box. It has been designed to be as unobtrusive and
 # universal as possible.
 
+# TODO: Check for return codes for all variables
+# TODO: Use colored messages?
+# TODO: Check if we can use the topology subnet?
+# TODO: See if we can print currently connected client information
+
 
 if [[ "$USER" != 'root' ]]; then
 	echo "Sorry, you need to run this as root"
@@ -38,9 +43,21 @@ else
 	exit
 fi
 
+DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE=/usr/share/doc/openvpn*/*ample*/sample-config-files/client.conf
+OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE=/usr/ share/doc/openvpn*/*ample*/sample-config-files/client.conf.ow
+
+
+# Generates the client.ovpn
 newclient () {
-	# Generates the client.ovpn
-	cp /usr/share/doc/openvpn*/*ample*/sample-config-files/client.conf ~/$1.ovpn
+    if [ -f  ${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE} ]
+        cp ${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE} ~/$1.ovpn
+    else
+        echo "Did you set up the server using this script earlier?"
+        echo "There is a slight problem, can't continue for now"
+        exit 1
+        # TODO: Fix this later
+    fi
+
 	sed -i "/ca ca.crt/d" ~/$1.ovpn
 	sed -i "/cert client.crt/d" ~/$1.ovpn
 	sed -i "/key client.key/d" ~/$1.ovpn
@@ -64,6 +81,42 @@ geteasyrsa () {
 	rm -rf ~/easy-rsa.tar.gz
 }
 
+install_software() {
+	if [[ "$OS" = 'debian' ]]; then
+		apt-get update
+		apt-get install openvpn iptables openssl -y
+		cp -R /usr/share/doc/openvpn/examples/easy-rsa/ /etc/openvpn
+		# easy-rsa isn't available by default for Debian Jessie and newer
+		if [[ ! -d /etc/openvpn/easy-rsa/2.0/ ]]; then
+			geteasyrsa
+		fi
+	else
+		# Else, the distro is CentOS
+		yum install epel-release -y
+		yum install openvpn iptables openssl wget -y
+		geteasyrsa
+	fi
+}
+
+#TODO: Have a separate function for enabling/disabling the service
+restart_openvpn() {
+	if [[ "$OS" = 'debian' ]]; then
+		# Little hack to check for systemd
+		if pgrep systemd-journal; then
+			systemctl restart openvpn@server.service
+		else
+			/etc/init.d/openvpn restart
+		fi
+	else
+		if pgrep systemd-journal; then
+			systemctl restart openvpn@server.service
+			systemctl enable openvpn@server.service
+		else
+			service openvpn restart
+			chkconfig openvpn on
+		fi
+	fi
+}
 
 # Try to get our IP from the system and fallback to the Internet.
 # I do this to make the script compatible with NATed servers (lowendspirit.com)
@@ -142,7 +195,7 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 				rm -rf /etc/openvpn
 				rm -rf /usr/share/doc/openvpn*
 				sed -i '/--dport 53 -j REDIRECT --to-port/d' $RCLOCAL
-				sed -i '/iptables -t nat -A POSTROUTING -s 10.8.0.0/d' $RCLOCAL
+				sed -i '/iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/d' $RCLOCAL
 				echo ""
 				echo "OpenVPN removed!"
 			else
@@ -161,13 +214,16 @@ else
 	# OpenVPN setup and first user creation
 	echo "I need to ask you a few questions before starting the setup"
 	echo "You can leave the default options and just press enter if you are ok with them"
+
 	echo ""
 	echo "First I need to know the IPv4 address of the network interface you want OpenVPN"
 	echo "listening to."
 	read -p "IP address: " -e -i $IP IP
+
 	echo ""
 	echo "What port do you want for OpenVPN?"
 	read -p "Port: " -e -i 1194 PORT
+
 	echo ""
 	echo "Do you want OpenVPN to be available at port 53 too?"
 	echo "This can be useful to connect under restrictive networks"
@@ -176,6 +232,7 @@ else
 	echo "Do you want to enable internal networking for the VPN?"
 	echo "This can allow VPN clients to communicate between them"
 	read -p "Allow internal networking [y/n]: " -e -i n INTERNALNETWORK
+
 	echo ""
 	echo "What DNS do you want to use with the VPN?"
 	echo "   1) Current system resolvers"
@@ -184,7 +241,17 @@ else
 	echo "   4) NTT"
 	echo "   5) Hurricane Electric"
 	echo "   6) Yandex"
-	read -p "DNS [1-6]: " -e -i 1 DNS
+	echo "   7) Enter custom DNS"
+	read -p "DNS [1-7]: " -e -i 7 DNS
+
+    echo ""
+    echo "What subnet do you want to use with the VPN?"
+	read -p "Enter the subnet IP address: " -e -i "10.8.0.0" OPENVPN_SUBNET
+
+    echo ""
+    echo ""
+	read -p "Do you want to enable topology subnet? [y/n]: " -e -i n TOPOLOGY_SUBNET
+
 	echo ""
 	echo "Finally, tell me your name for the client cert"
 	echo "Please, use one word only, no special characters"
@@ -192,20 +259,11 @@ else
 	echo ""
 	echo "Okay, that was all I needed. We are ready to setup your OpenVPN server now"
 	read -n1 -r -p "Press any key to continue..."
-	if [[ "$OS" = 'debian' ]]; then
-		apt-get update
-		apt-get install openvpn iptables openssl -y
-		cp -R /usr/share/doc/openvpn/examples/easy-rsa/ /etc/openvpn
-		# easy-rsa isn't available by default for Debian Jessie and newer
-		if [[ ! -d /etc/openvpn/easy-rsa/2.0/ ]]; then
-			geteasyrsa
-		fi
-	else
-		# Else, the distro is CentOS
-		yum install epel-release -y
-		yum install openvpn iptables openssl wget -y
-		geteasyrsa
-	fi
+
+
+    install_software
+
+
 	cd /etc/openvpn/easy-rsa/2.0/
 	# Let's fix one thing first...
 	cp -u -p openssl-1.0.0.cnf openssl.cnf
@@ -268,7 +326,25 @@ else
 		sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 77.88.8.8"|' server.conf
 		sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 77.88.8.1"|' server.conf
 		;;
+		7) 
+        read -p "Please enter the IP address of primary DNS server: " p_dns_server
+        read -p "Please enter the IP address of secondary DNS server [optional]: " s_dns_server
+        
+		sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS '"${p_dns_server}"'""|' server.conf
+        if [ "${s_dns_server}" != "" ]; then
+            sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS '"${s_dns_server}"'"|' server.conf
+        fi
+
+		;;
 	esac
+
+    # Change the subnet
+    sed -i "s|server 10.8.0.0 255.255.255.0| server ${OPENVPN_SUBNET} 255.255.255.0|" server.conf
+
+    if [ "${TOPOLOGY_SUBNET}" == "y" || "${TOPOLOGY_SUBNET}" == "Y" ]; then
+        sed -i 's|;topology subnet|topology subnet|' server.conf
+    fi
+
 	# Listen at port 53 too if user wants that
 	if [[ "$ALTPORT" = 'y' ]]; then
 		iptables -t nat -A PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-port $PORT
@@ -289,29 +365,18 @@ else
 	echo 1 > /proc/sys/net/ipv4/ip_forward
 	# Set iptables
 	if [[ "$INTERNALNETWORK" = 'y' ]]; then
-		iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-		sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
+		iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 ! -d ${OPENVPN_SUBNET}/24 -j SNAT --to $IP
+		sed -i "1 a\iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 ! -d ${OPENVPN_SUBNET}/24 -j SNAT --to $IP" $RCLOCAL
 	else
-		iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -j SNAT --to $IP
-		sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
+		iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 -j SNAT --to $IP
+		sed -i "1 a\iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 -j SNAT --to $IP" $RCLOCAL
 	fi
+
 	# And finally, restart OpenVPN
-	if [[ "$OS" = 'debian' ]]; then
-		# Little hack to check for systemd
-		if pgrep systemd-journal; then
-			systemctl restart openvpn@server.service
-		else
-			/etc/init.d/openvpn restart
-		fi
-	else
-		if pgrep systemd-journal; then
-			systemctl restart openvpn@server.service
-			systemctl enable openvpn@server.service
-		else
-			service openvpn restart
-			chkconfig openvpn on
-		fi
-	fi
+    restart_openvpn
+
+    # TODO: Use a variable for the server
+    # TODO: What if that server is down? 
 	# Try to detect a NATed connection and ask about it to potential LowEndSpirit
 	# users
 	EXTERNALIP=$(wget -qO- ipv4.icanhazip.com)
@@ -326,11 +391,14 @@ else
 			IP=$USEREXTERNALIP
 		fi
 	fi
+
 	# IP/port set on the default client.conf so we can add further users
 	# without asking for them
-	sed -i "s|remote my-server-1 1194|remote $IP $PORT|" /usr/share/doc/openvpn*/*ample*/sample-config-files/client.conf
+    cp ${DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE} ${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}
+	sed -i "s|remote my-server-1 1194|remote $IP $PORT|" ${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}
 	# Generate the client.ovpn
 	newclient "$CLIENT"
+
 	echo ""
 	echo "Finished!"
 	echo ""
