@@ -51,9 +51,20 @@ echo "DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE=${DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE}"
 echo "OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE=${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}"
 
 # Generates the client.ovpn
-newclient () {
+add_client() {
+    echo ""
+    echo "Tell me a name for the client cert"
+    echo "Please, use one word only, no special characters"
+    read -p "Client name: " -e -i client CLIENT
+    cd /etc/openvpn/easy-rsa/2.0/
+    source ./vars
+    # build-key for the client
+    export KEY_CN="$CLIENT"
+    export EASY_RSA="${EASY_RSA:-.}"
+    "$EASY_RSA/pkitool" $CLIENT
+
     if [ -f  "${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}" ]; then
-        cp "${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}" ~/$1.ovpn
+        cp "${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}" ~/${CLIENT}.ovpn
     else
         echo "Did you set up the server using this script earlier?"
         echo "There is a slight problem, can't continue for now"
@@ -61,20 +72,64 @@ newclient () {
         # TODO: Fix this later
     fi
 
-    sed -i "/ca ca.crt/d" ~/$1.ovpn
-    sed -i "/cert client.crt/d" ~/$1.ovpn
-    sed -i "/key client.key/d" ~/$1.ovpn
-    echo "<ca>" >> ~/$1.ovpn
-    cat /etc/openvpn/easy-rsa/2.0/keys/ca.crt >> ~/$1.ovpn
-    echo "</ca>" >> ~/$1.ovpn
-    echo "<cert>" >> ~/$1.ovpn
-    cat /etc/openvpn/easy-rsa/2.0/keys/$1.crt >> ~/$1.ovpn
-    echo "</cert>" >> ~/$1.ovpn
-    echo "<key>" >> ~/$1.ovpn
-    cat /etc/openvpn/easy-rsa/2.0/keys/$1.key >> ~/$1.ovpn
-    echo "</key>" >> ~/$1.ovpn
+    sed -i "/ca ca.crt/d" ~/${CLIENT}.ovpn
+    sed -i "/cert client.crt/d" ~/${CLIENT}.ovpn
+    sed -i "/key client.key/d" ~/${CLIENT}.ovpn
+    echo "<ca>" >> ~/${CLIENT}.ovpn
+    cat /etc/openvpn/easy-rsa/2.0/keys/ca.crt >> ~/${CLIENT}.ovpn
+    echo "</ca>" >> ~/${CLIENT}.ovpn
+    echo "<cert>" >> ~/${CLIENT}.ovpn
+    cat /etc/openvpn/easy-rsa/2.0/keys/${CLIENT}.crt >> ~/${CLIENT}.ovpn
+    echo "</cert>" >> ~/${CLIENT}.ovpn
+    echo "<key>" >> ~/${CLIENT}.ovpn
+    cat /etc/openvpn/easy-rsa/2.0/keys/${CLIENT}.key >> ~/${CLIENT}.ovpn
+    echo "</key>" >> ~/${CLIENT}.ovpn
+
+
+    echo ""
+    echo "Client $CLIENT added, certs available at ~/$CLIENT.ovpn"
+    echo "If you want to add more clients, you simply need to run this script another time!"
+
+    # TODO: Handle if there is client specific configuration to be done on server
+    # Say static ip, enable default gateway or not etc.
+
+    # Figure out the client-config-dir
+    CCD_DIR_NAME=`grep "^\s\?\+client-config-dir" ./test.txt | awk '{print $2}'`
+    if [ ! -d "/etc/openvpn/${CCD_DIR_NAME}" ]; then
+        echo "Error: client-config-dir ${CCD_DIR_NAME} doesn't exist"
+        # TODO: Should I create?
+        mkdir -p "/etc/openvpn/${CCD_DIR_NAME}"
+    fi
+
+    if [ -f "/etc/openvpn/${CCD_DIR_NAME}/${CLIENT}" ]; then
+        echo "Client specific file: /etc/openvpn/${CCD_DIR_NAME}/${CLIENT} already exists"
+        # TODO: Decide what we need to do.
+    else
+        touch "/etc/openvpn/${CCD_DIR_NAME}/${CLIENT}"
+    fi
+
+    echo ""
+    read -p "Do you want to assign a static IP address for the client? [y/n]: " -e -i y CLIENT_ASSIGN_STATIC_IP
+
+    if [ "${CLIENT_ASSIGN_STATIC_IP}" == "y" -o "${CLIENT_ASSIGN_STATIC_IP}" == "Y" ]; then
+        # TODO: Figure out what IP addresses are already in use.
+        echo ""
+        read -p "Enter the static IP address: " CLIENT_IP
+        echo "ifconfig-push ${CLIENT_IP} 255.255.255.0" >> "/etc/openvpn/${CCD_DIR_NAME}/${CLIENT}"
+        # TODO: The mask is hard coded, need to fix that later
+    fi
+
+    echo ""
+    read -p "Do you want this client's traffic to go through VPN? [y/n]: " -e -i y CLIENT_DEFAULT_GW
+
+    if [ "${CLIENT_DEFAULT_GW}" == "y" -o "${CLIENT_DEFAULT_GW}" == "Y" ]; then
+        echo ""
+        echo 'push "redirect-gateway def1"' >> "/etc/openvpn/${CCD_DIR_NAME}/${CLIENT}"
+    fi
+
 }
 
+# TODO: Check if we can put the version in a variable or somehow use the latest?
 geteasyrsa () {
     wget --no-check-certificate -O ~/easy-rsa.tar.gz https://github.com/OpenVPN/easy-rsa/archive/2.2.2.tar.gz
     tar xzf ~/easy-rsa.tar.gz -C ~/
@@ -101,6 +156,33 @@ install_software() {
     fi
 }
 
+configure_firewall() {
+
+    # TODO: Check if iptables command is present
+    # TODO: Install iptables using yum if not present
+    # TODO: Ask the user to install either iptables/firewalld if on CentOS
+
+    USE_IPTABLES=0
+
+    if [ "${USE_IPTABLES}" == "1" ]; then
+        if [[ "$INTERNALNETWORK" = 'y' ]]; then
+            iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 ! -d ${OPENVPN_SUBNET}/24 -j SNAT --to $IP
+            sed -i "1 a\iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 ! -d ${OPENVPN_SUBNET}/24 -j SNAT --to $IP" $RCLOCAL
+        else
+            iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 -j SNAT --to $IP
+            sed -i "1 a\iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 -j SNAT --to $IP" $RCLOCAL
+        fi
+    else
+        firewall-cmd --permanent --zone=public --add-service openvpn
+        firewall-cmd --permanent --zone=public --add-masquerade
+        firewall-cmd --reload
+
+        #if [[ "$INTERNALNETWORK" = 'y' ]]; then
+        #else
+        #fi
+    fi
+}
+
 #TODO: Have a separate function for enabling/disabling the service
 restart_openvpn() {
     if [[ "$OS" = 'debian' ]]; then
@@ -118,6 +200,60 @@ restart_openvpn() {
             service openvpn restart
             chkconfig openvpn on
         fi
+    fi
+}
+
+revoke_client() {
+
+    # TODO: Instead of asking the user for the client name,
+    # can't we figure out ourselves and provide a choice?
+
+    echo ""
+    echo "Tell me the existing client name"
+    read -p "Client name: " -e -i client CLIENT
+    cd /etc/openvpn/easy-rsa/2.0/
+    . /etc/openvpn/easy-rsa/2.0/vars
+    . /etc/openvpn/easy-rsa/2.0/revoke-full $CLIENT
+
+    #TODO: Remove any CCD file present for the CLIENT
+
+    # If it's the first time revoking a cert, we need to add the crl-verify line
+    if ! grep -q "crl-verify" "/etc/openvpn/server.conf"; then
+        echo "crl-verify /etc/openvpn/easy-rsa/2.0/keys/crl.pem" >> "/etc/openvpn/server.conf"
+        # And restart
+        if pgrep systemd-journal; then
+            systemctl restart openvpn@server.service
+        else
+            if [[ "$OS" = 'debian' ]]; then
+                /etc/init.d/openvpn restart
+            else
+                service openvpn restart
+            fi
+        fi
+    fi
+    echo ""
+    echo "Certificate for client $CLIENT revoked"
+}
+
+uninstall_openvpn() {
+    echo ""
+    read -p "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
+    if [[ "$REMOVE" = 'y' ]]; then
+        if [[ "$OS" = 'debian' ]]; then
+            apt-get remove --purge -y openvpn openvpn-blacklist
+        else
+            yum remove openvpn -y
+        fi
+        rm -rf /etc/openvpn
+        rm -rf /usr/share/doc/openvpn*
+        # TODO: May not work if firewalld is used
+        sed -i '/--dport 53 -j REDIRECT --to-port/d' $RCLOCAL
+        sed -i '/iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/d' $RCLOCAL
+        echo ""
+        echo "OpenVPN removed!"
+    else
+        echo ""
+        echo "Removal aborted!"
     fi
 }
 
@@ -145,69 +281,22 @@ if [[ -e /etc/openvpn/server.conf ]]; then
         read -p "Select an option [1-4]: " option
         case $option in
             1) 
-            echo ""
-            echo "Tell me a name for the client cert"
-            echo "Please, use one word only, no special characters"
-            read -p "Client name: " -e -i client CLIENT
-            cd /etc/openvpn/easy-rsa/2.0/
-            source ./vars
-            # build-key for the client
-            export KEY_CN="$CLIENT"
-            export EASY_RSA="${EASY_RSA:-.}"
-            "$EASY_RSA/pkitool" $CLIENT
-            # Generate the client.ovpn
-            newclient "$CLIENT"
-            echo ""
-            echo "Client $CLIENT added, certs available at ~/$CLIENT.ovpn"
-            exit
-            ;;
+                add_client
+                exit
+                ;;
+
             2)
-            echo ""
-            echo "Tell me the existing client name"
-            read -p "Client name: " -e -i client CLIENT
-            cd /etc/openvpn/easy-rsa/2.0/
-            . /etc/openvpn/easy-rsa/2.0/vars
-            . /etc/openvpn/easy-rsa/2.0/revoke-full $CLIENT
-            # If it's the first time revoking a cert, we need to add the crl-verify line
-            if ! grep -q "crl-verify" "/etc/openvpn/server.conf"; then
-                echo "crl-verify /etc/openvpn/easy-rsa/2.0/keys/crl.pem" >> "/etc/openvpn/server.conf"
-                # And restart
-                if pgrep systemd-journal; then
-                    systemctl restart openvpn@server.service
-                else
-                    if [[ "$OS" = 'debian' ]]; then
-                        /etc/init.d/openvpn restart
-                    else
-                        service openvpn restart
-                    fi
-                fi
-            fi
-            echo ""
-            echo "Certificate for client $CLIENT revoked"
-            exit
-            ;;
+                revoke_client
+                exit
+                ;;
+
             3) 
-            echo ""
-            read -p "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
-            if [[ "$REMOVE" = 'y' ]]; then
-                if [[ "$OS" = 'debian' ]]; then
-                    apt-get remove --purge -y openvpn openvpn-blacklist
-                else
-                    yum remove openvpn -y
-                fi
-                rm -rf /etc/openvpn
-                rm -rf /usr/share/doc/openvpn*
-                sed -i '/--dport 53 -j REDIRECT --to-port/d' $RCLOCAL
-                sed -i '/iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/d' $RCLOCAL
-                echo ""
-                echo "OpenVPN removed!"
-            else
-                echo ""
-                echo "Removal aborted!"
-            fi
-            exit
-            ;;
-            4) exit;;
+                uninstall_openvpn
+                exit
+                ;;
+            4) 
+                exit
+                ;;
         esac
     done
 else
@@ -262,18 +351,21 @@ else
         read -p "Please enter the IP address of secondary DNS server [optional]: " s_dns_server
     fi
         
-
     echo ""
-    echo "Finally, tell me your name for the client cert"
-    echo "Please, use one word only, no special characters"
-    read -p "Client name: " -e -i client CLIENT
+    read -p "Do you want to enable client-config-dir? [y/n]: " -e -i y CCD_ENABLE
+
+    if [ "${CCD_ENABLE}" == "y" -o "${CCD_ENABLE}" == "Y" ]; then
+        echo ""
+        echo "What name would you like to use for client-config-dir?"
+        read -p "Enter a valid directory name: " -e -i ccd CCD_DIR_NAME
+    fi
+
     echo ""
     echo "Okay, that was all I needed. We are ready to setup your OpenVPN server now"
     read -n1 -r -p "Press any key to continue..."
 
 
     install_software
-
 
     cd /etc/openvpn/easy-rsa/2.0/
     # Let's fix one thing first...
@@ -346,6 +438,13 @@ else
         ;;
     esac
 
+    # Create the CCD directory
+    if [ "${CCD_ENABLE}" == "y" -o "${CCD_ENABLE}" == "Y" ]; then
+        mkdir -p "/etc/openvpn/${CCD_DIR_NAME}"
+        echo "client-config-dir ${CCD_DIR_NAME}" >> /etc/openvpn/server.conf
+    fi
+
+
     # Change the subnet
     sed -i "s|server 10.8.0.0 255.255.255.0| server ${OPENVPN_SUBNET} 255.255.255.0|" server.conf
 
@@ -371,15 +470,9 @@ else
     fi
     # Avoid an unneeded reboot
     echo 1 > /proc/sys/net/ipv4/ip_forward
-    # Set iptables
-    if [[ "$INTERNALNETWORK" = 'y' ]]; then
-        iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 ! -d ${OPENVPN_SUBNET}/24 -j SNAT --to $IP
-        sed -i "1 a\iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 ! -d ${OPENVPN_SUBNET}/24 -j SNAT --to $IP" $RCLOCAL
-    else
-        iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 -j SNAT --to $IP
-        sed -i "1 a\iptables -t nat -A POSTROUTING -s ${OPENVPN_SUBNET}/24 -j SNAT --to $IP" $RCLOCAL
-    fi
 
+
+    # Set iptables
     # And finally, restart OpenVPN
     restart_openvpn
 
@@ -404,12 +497,16 @@ else
     # without asking for them
     cp "${DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE}" "${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}"
     sed -i "s|remote my-server-1 1194|remote $IP $PORT|" "${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}"
-    # Generate the client.ovpn
-    newclient "$CLIENT"
+
+    echo ""
+    echo "You can add more clients later by simply running this script again!"
+    read -p "Do you want to add a new client NOW? [y/n]: " -e -i n ADD_CLIENT_NOW
+
+    if [ "${ADD_CLIENT_NOW}" == "y" -o "${ADD_CLIENT_NOW}" == "Y" ]; then
+        add_client
+    fi
 
     echo ""
     echo "Finished!"
     echo ""
-    echo "Your client config is available at ~/$CLIENT.ovpn"
-    echo "If you want to add more clients, you simply need to run this script another time!"
 fi
