@@ -44,14 +44,19 @@ else
     exit
 fi
 
-DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE=`ls /usr/share/doc/openvpn*/*ample*/sample-config-files/client.conf`
-OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE="${DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE}".ow
+DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE=
+OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE=
 
-echo "DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE=${DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE}"
-echo "OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE=${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}"
 
 # Generates the client.ovpn
 add_client() {
+
+    DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE=`ls /usr/share/doc/openvpn*/*ample*/sample-config-files/client.conf`
+    OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE="${DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE}".ow
+    
+    echo "DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE=${DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE}"
+    echo "OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE=${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}"
+
     echo ""
     echo "Tell me a name for the client cert"
     echo "Please, use one word only, no special characters"
@@ -154,6 +159,7 @@ install_software() {
         yum install openvpn iptables openssl wget -y
         geteasyrsa
     fi
+
 }
 
 configure_firewall() {
@@ -161,6 +167,8 @@ configure_firewall() {
     # TODO: Check if iptables command is present
     # TODO: Install iptables using yum if not present
     # TODO: Ask the user to install either iptables/firewalld if on CentOS
+
+    #TODO: Should we put the tun0 interface in a zone?
 
     USE_IPTABLES=0
 
