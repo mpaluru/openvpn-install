@@ -94,7 +94,7 @@ add_client() {
     # Say static ip, enable default gateway or not etc.
 
     # Figure out the client-config-dir
-    CCD_DIR_NAME=`grep "^\s\?\+client-config-dir" ./test.txt | awk '{print $2}'`
+    CCD_DIR_NAME=`grep "^\s\?\+client-config-dir" /etc/openvpn/server.conf | awk '{print $2}'`
     if [ ! -d "/etc/openvpn/${CCD_DIR_NAME}" ]; then
         echo "Error: client-config-dir ${CCD_DIR_NAME} doesn't exist"
         # TODO: Should I create?
@@ -400,7 +400,10 @@ else
     cd /etc/openvpn/
     # Set the server configuration
     sed -i 's|dh dh1024.pem|dh dh2048.pem|' server.conf
-    sed -i 's|;push "redirect-gateway def1 bypass-dhcp"|push "redirect-gateway def1 bypass-dhcp"|' server.conf
+
+    # TODO: Not all users want to use the VPN as default gateway. Don't use this
+    # sed -i 's|;push "redirect-gateway def1 bypass-dhcp"|push "redirect-gateway def1 bypass-dhcp"|' server.conf
+
     sed -i "s|port 1194|port $PORT|" server.conf
     # DNS
     case $DNS in
