@@ -12,6 +12,7 @@
 # TODO: Check if we can use the topology subnet?
 # TODO: See if we can print currently connected client information
 # TODO: Configure the company/department parameters while configuring cert
+# TODO: TCP/UDP choice
 
 
 if [[ "$USER" != 'root' ]]; then
@@ -482,6 +483,7 @@ else
     # Avoid an unneeded reboot
     echo 1 > /proc/sys/net/ipv4/ip_forward
 
+    configure_firewall
 
     # Set iptables
     # And finally, restart OpenVPN
@@ -504,6 +506,8 @@ else
         fi
     fi
 
+    DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE=`ls /usr/share/doc/openvpn*/*ample*/sample-config-files/client.conf`
+    OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE="${DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE}".ow
     # IP/port set on the default client.conf so we can add further users
     # without asking for them
     cp "${DEFAUT_CLIENT_CONFIG_TEMPLATE_FILE}" "${OPEN_WARRIOR_CLIENT_CONFIG_TEMPLATE_FILE}"
